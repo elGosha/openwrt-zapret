@@ -1,0 +1,48 @@
+name: Build zapret for OpenWrt (mt7622 / 24.10.1)
+
+on:
+  workflow_dispatch:  # запуск вручную из вкладки Actions
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (empty repo is fine)
+        uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git wget unzip zstd
+
+      - name: Download OpenWrt SDK (24.10.1 / mediatek mt7622)
+        run: |
+          wget https://downloads.openwrt.org/releases/24.10.1/targets/mediatek/mt7622/openwrt-sdk-24.10.1-mediatek-mt7622_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+          tar -I zstd -xf openwrt-sdk-24.10.1-mediatek-mt7622_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+          mv openwrt-sdk-* sdk
+
+      - name: Clone zapret sources
+        run: |
+          git clone https://github.com/bol-van/zapret.git
+
+      - name: Prepare SDK and add zapret package
+        run: |
+          cd sdk
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          mkdir -p package
+          cp -r ../zapret/openwrt/zapret package/zapret
+          make defconfig
+
+      - name: Build zapret package
+        run: |
+          cd sdk
+          make package/zapret/compile -j$(nproc) V=s
+
+      - name: Upload .ipk artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: zapret-ipk
+          path: |
+            sdk/bin/packages/**/zapret*ipk
+            sdk/bin/targets/**/packages/zapret*ipk
