@@ -1,48 +1,81 @@
-name: Build zapret for OpenWrt (mt7622 / 24.10.1)
+name: Build zapret for OpenWrt
 
 on:
-  workflow_dispatch:  # запуск вручную из вкладки Actions
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout (empty repo is fine)
-        uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v3
 
-      - name: Install build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential git wget unzip zstd
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y build-essential flex bison gawk wget unzip xz-utils zstd git
 
-      - name: Download OpenWrt SDK (24.10.1 / mediatek mt7622)
-        run: |
-          wget https://downloads.openwrt.org/releases/24.10.1/targets/mediatek/mt7622/openwrt-sdk-24.10.1-mediatek-mt7622_gcc-13.3.0_musl.Linux-x86_64.tar.zst
-          tar -I zstd -xf openwrt-sdk-24.10.1-mediatek-mt7622_gcc-13.3.0_musl.Linux-x86_64.tar.zst
-          mv openwrt-sdk-* sdk
+    - name: Download SDK
+      run: |
+        wget https://downloads.openwrt.org/releases/24.10.1/targets/mediatek/mt7622/openwrt-sdk-24.10.1-mediatek-mt7622_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+        mkdir sdk
+        tar -I zstd -xvf openwrt-sdk-24.10.1-mediatek-mt7622_gcc-13.3.0_musl.Linux-x86_64.tar.zst -C sdk --strip-components=1
 
-      - name: Clone zapret sources
-        run: |
-          git clone https://github.com/bol-van/zapret.git
+    - name: Prepare zapret package
+      run: |
+        cd sdk/package
+        git clone https://github.com/bol-van/zapret.git zapret
+        # создаем Makefile для OpenWrt
+        cat > zapret/Makefile <<'EOF'
+        include $(TOPDIR)/rules.mk
 
-      - name: Prepare SDK and add zapret package
-        run: |
-          cd sdk
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          mkdir -p package
-          cp -r ../zapret/openwrt/zapret package/zapret
-          make defconfig
+        PKG_NAME:=zapret
+        PKG_VERSION:=71
+        PKG_RELEASE:=1
 
-      - name: Build zapret package
-        run: |
-          cd sdk
-          make package/zapret/compile -j$(nproc) V=s
+        PKG_SOURCE_PROTO:=git
+        PKG_SOURCE_URL:=https://github.com/bol-van/zapret.git
+        PKG_SOURCE_DATE:=2025-08-01
+        PKG_SOURCE_VERSION:=HEAD
+        PKG_MIRROR_HASH:=skip
 
-      - name: Upload .ipk artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: zapret-ipk
-          path: |
-            sdk/bin/packages/**/zapret*ipk
-            sdk/bin/targets/**/packages/zapret*ipk
+        include $(INCLUDE_DIR)/package.mk
+
+        define Package/zapret
+          SECTION:=net
+          CATEGORY:=Network
+          TITLE:=zapret DPI bypass
+          DEPENDS:=+libpthread +libpcap
+        endef
+
+        define Package/zapret/description
+          DPI bypass utility (nfqws, tpws, etc).
+        endef
+
+        define Build/Compile
+          $(MAKE) -C $(PKG_BUILD_DIR) nfqws tpws
+        endef
+
+        define Package/zapret/install
+          $(INSTALL_DIR) $(1)/usr/bin
+          $(INSTALL_BIN) $(PKG_BUILD_DIR)/nfq/nfqws/nfqws $(1)/usr/bin/
+          $(INSTALL_BIN) $(PKG_BUILD_DIR)/tpws/tpws $(1)/usr/bin/
+        endef
+
+        $(eval $(call BuildPackage,zapret))
+        EOF
+
+    - name: Build package
+      run: |
+        cd sdk
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        make defconfig
+        make package/zapret/compile V=s
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: zapret-ipk
+        path: sdk/bin/packages/**/zapret_*.ipk
